@@ -1,0 +1,22 @@
+{
+  "name": "analytics",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "prisma:studio": "prisma studio",
+    "prisma:generate": "prisma generate && node copy-db-types.js",
+    "prisma:migrate": "prisma migrate dev"
+  },
+  "keywords": [],
+  "devDependencies": {
+    "prisma-kysely": "^2.2.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.15.0",
+    "prisma": "^6.15.0"
+  }
+}

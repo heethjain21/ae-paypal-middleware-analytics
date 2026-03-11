@@ -1,0 +1,59 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator kysely {
+  provider     = "prisma-kysely"
+  output       = "./generated/types"
+  fileName     = "database.types.ts"
+  enumFileName = "database.enums.ts"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RequestStatus {
+  SUCCESS
+  FAILED
+}
+
+model Request {
+  debug_id        String        @id @db.VarChar(64)
+
+  site_url        String
+  status          RequestStatus
+
+  path               String
+  method             String
+  code               Int
+  duration           Int
+
+  paypal_request_id String?
+
+  raw_request  Json?
+  raw_response Json?
+
+  error_code    String?
+  error_message String?
+  error_stack   Json?
+
+  is_sandbox Boolean @default(false)
+  plugin_version String
+  internal_request_id String
+
+  created_at DateTime
+  updated_at DateTime @default(now()) @updatedAt
+
+  @@index([paypal_request_id, created_at])
+  @@index([site_url, created_at])
+  @@index([status, created_at])
+  @@index([path, created_at])
+  @@index([created_at])
+  @@index([is_sandbox, created_at])
+
+  @@map("requests")
+}

@@ -1,0 +1,25 @@
+{
+  "name": "cleanup-db-cron",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "npx tsc",
+    "build:zip": "npm i && npx tsc && npm prune --production && cp rds-us-east-2-bundle.pem dist/rds-us-east-2-bundle.pem && cp -r node_modules dist/node_modules && cd dist && zip -r ../function.zip . && cd .."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "aws-lambda": "^1.0.7",
+    "kysely": "^0.28.5",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.152",
+    "@types/node": "^24.3.1",
+    "@types/pg": "^8.15.5",
+    "typescript": "^5.9.2"
+  }
+}
