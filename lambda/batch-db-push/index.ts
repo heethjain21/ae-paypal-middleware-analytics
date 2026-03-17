@@ -113,7 +113,9 @@ export const handler = async (
       if (messageData.table === "requests") {
         const debugId = getDebugId(messageData.data);
         requestItems.push({ record, message: messageData, debugId });
-        if (isPaymentPath(messageData.data.request_url)) {
+        const method = messageData.data.request_method;
+        const code = Number(messageData.data.response_status_code);
+        if (isPaymentPath(messageData.data.request_url) && method === 'POST' && code === 201) {
           paymentItems.push({ record, message: messageData, debugId });
         }
       } else {
