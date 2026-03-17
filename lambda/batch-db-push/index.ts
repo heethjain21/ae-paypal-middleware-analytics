@@ -167,10 +167,8 @@ const toDate = (value: string | null | undefined): Date | null => {
   return isNaN(d.getTime()) ? null : d;
 };
 
-const getDebugId = (rawData: RequestData): string =>
-  rawData.response_headers?.["paypal-debug-id"] ??
-  rawData.request_headers?.["PayPal-Request-Id"] ??
-  rawData.request_id ??
+const getDebugId = (rawData: RequestData): string => 
+  rawData.response_headers?.["paypal-debug-id"] ?? 
   crypto.randomUUID();
 
 const isPaymentPath = (path: string): boolean => {
