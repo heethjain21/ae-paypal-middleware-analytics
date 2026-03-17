@@ -274,6 +274,7 @@ const buildRequestRow = (
     is_sandbox: rawData.metadata.test_mode === "yes",
     plugin_version: rawData.metadata.plugin_version,
     internal_request_id: rawData.request_id,
+    action_name: rawData.request_action_name,
 
     created_at: new Date(rawData.created_at),
   };
