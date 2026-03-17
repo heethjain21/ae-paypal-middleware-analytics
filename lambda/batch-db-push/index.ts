@@ -95,8 +95,8 @@ export const handler = async (
   console.log(`Processing ${event.Records.length} SQS messages`);
 
   const failedMessageIds = new Set<string>();
-  const requestItems: Array<{ record: SQSRecord; message: SQSMessage }> = [];
-  const paymentItems: Array<{ record: SQSRecord; message: SQSMessage }> = [];
+  const requestItems: Array<{ record: SQSRecord; message: SQSMessage; debugId: string }> = [];
+  const paymentItems: Array<{ record: SQSRecord; message: SQSMessage; debugId: string }> = [];
 
   for (const record of event.Records) {
     try {
@@ -111,9 +111,10 @@ export const handler = async (
       }
 
       if (messageData.table === "requests") {
-        requestItems.push({ record, message: messageData });
+        const debugId = getDebugId(messageData.data);
+        requestItems.push({ record, message: messageData, debugId });
         if (isPaymentPath(messageData.data.request_url)) {
-          paymentItems.push({ record, message: messageData });
+          paymentItems.push({ record, message: messageData, debugId });
         }
       } else {
         throw new Error(`Unknown table: ${messageData.table}`);
@@ -186,7 +187,7 @@ const isPaymentPath = (path: string): boolean => {
   }
 };
 
-const buildRequestRow = (rawData: RequestData): Insertable<RequestTable> => {
+const buildRequestRow = (rawData: RequestData, debugId: string): Insertable<RequestTable> => {
   const responseStatusCode = Number(rawData.response_status_code);
 
   const status =
@@ -195,7 +196,7 @@ const buildRequestRow = (rawData: RequestData): Insertable<RequestTable> => {
       : RequestStatus.FAILED;
 
   return {
-    debug_id: getDebugId(rawData),
+    debug_id: debugId,
 
     site_url: rawData.metadata.wp_home,
     status,
@@ -222,7 +223,7 @@ const buildRequestRow = (rawData: RequestData): Insertable<RequestTable> => {
   };
 };
 
-const buildPaymentRow = (rawData: RequestData): Insertable<PaymentTable> => {
+const buildPaymentRow = (rawData: RequestData, debugId: string): Insertable<PaymentTable> => {
   const financials = extractFinancials(
     rawData.request_url,
     toJson(rawData.response_body),
@@ -236,7 +237,7 @@ const buildPaymentRow = (rawData: RequestData): Insertable<PaymentTable> => {
       : RequestStatus.FAILED;
 
   return {
-    debug_id: getDebugId(rawData),
+    debug_id: debugId,
     site_url: rawData.metadata?.wp_home,
     req_status: reqStatus,
     path: rawData.request_url,
@@ -300,9 +301,9 @@ const upsertPaymentsQuery = (rows: Insertable<PaymentTable>[]) =>
     );
 
 const batchUpsertRequests = async (
-  items: Array<{ record: SQSRecord; message: SQSMessage }>,
+  items: Array<{ record: SQSRecord; message: SQSMessage; debugId: string }>,
 ): Promise<BatchItemFailure[]> => {
-  const rows = items.map(({ message }) => buildRequestRow(message.data));
+  const rows = items.map(({ message, debugId }) => buildRequestRow(message.data, debugId));
 
   try {
     await upsertRequestsQuery(rows).execute();
@@ -317,14 +318,14 @@ const batchUpsertRequests = async (
     const failures: BatchItemFailure[] = [];
 
     await Promise.all(
-      items.map(async ({ record, message }) => {
+      items.map(async ({ record, message, debugId }) => {
         try {
-          await upsertRequestsQuery([buildRequestRow(message.data)]).execute();
+          await upsertRequestsQuery([buildRequestRow(message.data, debugId)]).execute();
         } catch (err) {
           console.error(`Failed to process message ${record.messageId}:`, err);
           console.log(
             "error message: ",
-            JSON.stringify(buildRequestRow(message.data), null, 2),
+            JSON.stringify(buildRequestRow(message.data, debugId), null, 2),
           );
           failures.push({ itemIdentifier: record.messageId });
         }
@@ -336,9 +337,9 @@ const batchUpsertRequests = async (
 };
 
 const batchUpsertPayments = async (
-  items: Array<{ record: SQSRecord; message: SQSMessage }>,
+  items: Array<{ record: SQSRecord; message: SQSMessage; debugId: string }>,
 ): Promise<BatchItemFailure[]> => {
-  const rows = items.map(({ message }) => buildPaymentRow(message.data));
+  const rows = items.map(({ message, debugId }) => buildPaymentRow(message.data, debugId));
 
   try {
     await upsertPaymentsQuery(rows).execute();
@@ -353,9 +354,9 @@ const batchUpsertPayments = async (
     const failures: BatchItemFailure[] = [];
 
     await Promise.all(
-      items.map(async ({ record, message }) => {
+      items.map(async ({ record, message, debugId }) => {
         try {
-          await upsertPaymentsQuery([buildPaymentRow(message.data)]).execute();
+          await upsertPaymentsQuery([buildPaymentRow(message.data, debugId)]).execute();
         } catch (err) {
           console.error(
             `Failed to process payment for message ${record.messageId}:`,
