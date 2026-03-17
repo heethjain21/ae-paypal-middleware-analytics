@@ -170,7 +170,29 @@ const toDate = (value: string | null | undefined): Date | null => {
   return isNaN(d.getTime()) ? null : d;
 };
 
-const getDebugId = (rawData: RequestData): string => 
+const getPath = (url: string): string => {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
+};
+
+const extractError = (
+  statusCode: number,
+  responseBody: any,
+): { error_code: string | null; error_message: string | null; error_stack: any } => {
+  if (statusCode < 400 || !responseBody) {
+    return { error_code: null, error_message: null, error_stack: null };
+  }
+  return {
+    error_code: responseBody.name ?? responseBody.error ?? null,
+    error_message: responseBody.message ?? responseBody.error_description ?? null,
+    error_stack: responseBody.details ?? null,
+  };
+};
+
+const getDebugId = (rawData: RequestData): string =>
   rawData.response_headers?.["paypal-debug-id"] ?? 
   crypto.randomUUID();
 
@@ -203,7 +225,7 @@ const buildRequestRow = (rawData: RequestData, debugId: string): Insertable<Requ
     site_url: rawData.metadata.wp_home,
     status,
 
-    path: rawData.request_url,
+    path: getPath(rawData.request_url),
     method: rawData.request_method,
     code: responseStatusCode,
     duration: Number(rawData.duration) || 0,
@@ -213,9 +235,7 @@ const buildRequestRow = (rawData: RequestData, debugId: string): Insertable<Requ
     raw_request: toJson(rawData.request_body),
     raw_response: toJson(rawData.response_body),
 
-    error_code: null,
-    error_message: null,
-    error_stack: null,
+    ...extractError(responseStatusCode, toJson(rawData.response_body)),
 
     is_sandbox: rawData.metadata.test_mode === "yes",
     plugin_version: rawData.metadata.plugin_version,
@@ -242,7 +262,7 @@ const buildPaymentRow = (rawData: RequestData, debugId: string): Insertable<Paym
     debug_id: debugId,
     site_url: rawData.metadata?.wp_home,
     req_status: reqStatus,
-    path: rawData.request_url,
+    path: getPath(rawData.request_url),
     duration: Number(rawData.duration) || 0,
     paypal_request_id: rawData.request_headers?.["PayPal-Request-Id"] ?? null,
     ...financials,
@@ -444,8 +464,9 @@ const extractFinancials = (
 
   // /v2/payments/captures/{id}/refund
   if (resource === "captures" && action === "refund") {
+    const refundAmount = toFloat(rawResponse.amount?.value);
     result.currency = rawResponse.amount?.currency_code ?? null;
-    result.gross_amount = toFloat(rawResponse.amount?.value);
+    result.gross_amount = refundAmount ? refundAmount * -1 : null;
     result.trxn_status = rawResponse.status ?? null;
 
     return result;
