@@ -1,8 +1,12 @@
 import { Context, SQSEvent, SQSRecord } from "aws-lambda";
-import fs from "fs";
+import fs, { read } from "fs";
 import { Insertable, Kysely, PostgresDialect, sql } from "kysely";
 import { Pool } from "pg";
-import { DB, Request as RequestTable } from "./types/database.types";
+import {
+  DB,
+  Request as RequestTable,
+  Payment as PaymentTable,
+} from "./types/database.types";
 import { RequestStatus } from "./types/database.enums";
 
 /**
@@ -53,6 +57,20 @@ interface RequestData {
   created_at: string;
 }
 
+interface ExtractedFinancials {
+  net_amount: number | null;
+  paypal_fee: number | null;
+  gross_amount: number | null;
+  platform_fee: number | null;
+  currency: string | null;
+  trxn_status: string | null;
+  merchant_id: string | null;
+  custom_id: string | null;
+  invoice_id: string | null;
+  paypal_create_time: Date | null;
+  paypal_update_time: Date | null;
+}
+
 interface SQSMessage {
   table: "requests";
   operation: "upsert" | "delete";
@@ -76,9 +94,9 @@ export const handler = async (
 
   console.log(`Processing ${event.Records.length} SQS messages`);
 
-  const failedMessages: BatchItemFailure[] = [];
+  const failedMessageIds = new Set<string>();
   const requestItems: Array<{ record: SQSRecord; message: SQSMessage }> = [];
-  
+  const paymentItems: Array<{ record: SQSRecord; message: SQSMessage }> = [];
 
   for (const record of event.Records) {
     try {
@@ -94,42 +112,80 @@ export const handler = async (
 
       if (messageData.table === "requests") {
         requestItems.push({ record, message: messageData });
+        if (isPaymentPath(messageData.data.request_url)) {
+          paymentItems.push({ record, message: messageData });
+        }
       } else {
         throw new Error(`Unknown table: ${messageData.table}`);
       }
     } catch (error) {
       console.error(`Failed to parse message ${record.messageId}:`, error);
-      failedMessages.push({ itemIdentifier: record.messageId });
+      failedMessageIds.add(record.messageId);
     }
   }
 
   if (requestItems.length > 0) {
     const failures = await batchUpsertRequests(requestItems);
-    failedMessages.push(...failures);
+    failures.forEach((f) => failedMessageIds.add(f.itemIdentifier));
+  }
+
+  if (paymentItems.length > 0) {
+    const failures = await batchUpsertPayments(paymentItems);
+    failures.forEach((f) => failedMessageIds.add(f.itemIdentifier));
   }
 
   console.log(
     `Processed ${
-      event.Records.length - failedMessages.length
-    } successfully, ${failedMessages.length} failed`,
+      event.Records.length - failedMessageIds.size
+    } successfully, ${failedMessageIds.size} failed`,
   );
 
-  return { batchItemFailures: failedMessages };
+  return {
+    batchItemFailures: Array.from(failedMessageIds).map((id) => ({
+      itemIdentifier: id,
+    })),
+  };
 };
 
 const toJson = (value: any) => {
-
   if (Array.isArray(value)) return toJson(value[0]);
-
   if (value === null || value === undefined) return null;
-
   if (typeof value === "string") return { body: value };
-  
   else if (typeof value === "object") return value;
-  else
-    return {
-      body: value,
-    };
+  else return { body: value };
+};
+
+const toFloat = (value: string | null | undefined): number | null => {
+  if (value == null) return null;
+  const n = parseFloat(value);
+  return isNaN(n) ? null : n;
+};
+
+const toDate = (value: string | null | undefined): Date | null => {
+  if (value == null) return null;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+};
+
+const getDebugId = (rawData: RequestData): string =>
+  rawData.response_headers?.["paypal-debug-id"] ??
+  rawData.request_headers?.["PayPal-Request-Id"] ??
+  rawData.request_id ??
+  crypto.randomUUID();
+
+const isPaymentPath = (path: string): boolean => {
+  try {
+    const segments = new URL(path).pathname.split("/").filter(Boolean);
+    const action = segments.at(-1);
+    const resource = segments.at(-3);
+    return (
+      (resource === "orders" && action === "capture") ||
+      (resource === "authorizations" && action === "capture") ||
+      (resource === "captures" && action === "refund")
+    );
+  } catch {
+    return false;
+  }
 };
 
 const buildRequestRow = (rawData: RequestData): Insertable<RequestTable> => {
@@ -140,14 +196,8 @@ const buildRequestRow = (rawData: RequestData): Insertable<RequestTable> => {
       ? RequestStatus.SUCCESS
       : RequestStatus.FAILED;
 
-  const debugId =
-    rawData.response_headers?.["paypal-debug-id"] ??
-    rawData.request_headers?.["PayPal-Request-Id"] ??
-    rawData.request_id ??
-    crypto.randomUUID();
-
   return {
-    debug_id: debugId,
+    debug_id: getDebugId(rawData),
 
     site_url: rawData.metadata.wp_home,
     status,
@@ -171,6 +221,33 @@ const buildRequestRow = (rawData: RequestData): Insertable<RequestTable> => {
     internal_request_id: rawData.request_id,
 
     created_at: new Date(rawData.created_at),
+  };
+};
+
+const buildPaymentRow = (rawData: RequestData): Insertable<PaymentTable> => {
+  const financials = extractFinancials(
+    rawData.request_url,
+    toJson(rawData.response_body),
+  );
+
+  const responseStatusCode = Number(rawData.response_status_code);
+
+  const reqStatus =
+    responseStatusCode >= 200 && responseStatusCode < 300
+      ? RequestStatus.SUCCESS
+      : RequestStatus.FAILED;
+
+  return {
+    debug_id: getDebugId(rawData),
+    site_url: rawData.metadata?.wp_home,
+    req_status: reqStatus,
+    path: rawData.request_url,
+    duration: Number(rawData.duration) || 0,
+    paypal_request_id: rawData.request_headers?.["PayPal-Request-Id"] ?? null,
+    ...financials,
+    is_sandbox: rawData.metadata.test_mode === 'yes',
+    plugin_version: rawData.metadata?.plugin_version,
+    internal_request_id: rawData.request_id,
   };
 };
 
@@ -199,6 +276,31 @@ const upsertRequestsQuery = (rows: Insertable<RequestTable>[]) =>
       }),
     );
 
+const upsertPaymentsQuery = (rows: Insertable<PaymentTable>[]) =>
+  db
+    .insertInto("payments")
+    .values(rows)
+    .onConflict((oc) =>
+      oc.column("debug_id").doUpdateSet({
+        path: sql`excluded.path`,
+        site_url: sql`excluded.site_url`,
+        duration: sql`excluded.duration`,
+        paypal_request_id: sql`excluded.paypal_request_id`,
+        internal_request_id: sql`excluded.internal_request_id`,
+        net_amount: sql`excluded.net_amount`,
+        paypal_fee: sql`excluded.paypal_fee`,
+        gross_amount: sql`excluded.gross_amount`,
+        platform_fee: sql`excluded.platform_fee`,
+        currency: sql`excluded.currency`,
+        trxn_status: sql`excluded.trxn_status`,
+        merchant_id: sql`excluded.merchant_id`,
+        custom_id: sql`excluded.custom_id`,
+        invoice_id: sql`excluded.invoice_id`,
+        paypal_create_time: sql`excluded.paypal_create_time`,
+        paypal_update_time: sql`excluded.paypal_update_time`,
+      }),
+    );
+
 const batchUpsertRequests = async (
   items: Array<{ record: SQSRecord; message: SQSMessage }>,
 ): Promise<BatchItemFailure[]> => {
@@ -206,9 +308,7 @@ const batchUpsertRequests = async (
 
   try {
     await upsertRequestsQuery(rows).execute();
-
     console.log(`Successfully batch upserted ${rows.length} requests`);
-
     return [];
   } catch (error) {
     console.error(
@@ -224,7 +324,10 @@ const batchUpsertRequests = async (
           await upsertRequestsQuery([buildRequestRow(message.data)]).execute();
         } catch (err) {
           console.error(`Failed to process message ${record.messageId}:`, err);
-          console.log("error message: ", JSON.stringify(buildRequestRow(message.data), null, 2));
+          console.log(
+            "error message: ",
+            JSON.stringify(buildRequestRow(message.data), null, 2),
+          );
           failures.push({ itemIdentifier: record.messageId });
         }
       }),
@@ -232,4 +335,120 @@ const batchUpsertRequests = async (
 
     return failures;
   }
+};
+
+const batchUpsertPayments = async (
+  items: Array<{ record: SQSRecord; message: SQSMessage }>,
+): Promise<BatchItemFailure[]> => {
+  const rows = items.map(({ message }) => buildPaymentRow(message.data));
+
+  try {
+    await upsertPaymentsQuery(rows).execute();
+    console.log(`Successfully batch upserted ${rows.length} payments`);
+    return [];
+  } catch (error) {
+    console.error(
+      "Payments batch upsert failed, falling back to individual inserts:",
+      error,
+    );
+
+    const failures: BatchItemFailure[] = [];
+
+    await Promise.all(
+      items.map(async ({ record, message }) => {
+        try {
+          await upsertPaymentsQuery([buildPaymentRow(message.data)]).execute();
+        } catch (err) {
+          console.error(
+            `Failed to process payment for message ${record.messageId}:`,
+            err,
+          );
+          failures.push({ itemIdentifier: record.messageId });
+        }
+      }),
+    );
+
+    return failures;
+  }
+};
+
+const extractFinancials = (
+  path: string,
+  rawResponse: any,
+): ExtractedFinancials => {
+  const result: ExtractedFinancials = {
+    net_amount: null,
+    paypal_fee: null,
+    gross_amount: null,
+    platform_fee: null,
+    currency: null,
+    trxn_status: null,
+    merchant_id: null,
+    custom_id: null,
+    invoice_id: null,
+    paypal_create_time: null,
+    paypal_update_time: null,
+  };
+
+  if (!rawResponse || typeof rawResponse !== "object") return result;
+
+  const segments = new URL(path).pathname.split("/").filter(Boolean);
+
+  const action = segments.at(-1);
+  const resource = segments.at(-3);
+
+  // /v2/checkout/orders/{id}/capture
+  if (resource === "orders" && action === "capture") {
+    const capture = rawResponse.purchase_units?.[0]?.payments?.captures?.[0];
+
+    if (capture) {
+      const breakdown = capture.seller_receivable_breakdown;
+      result.net_amount = toFloat(breakdown?.net_amount?.value);
+      result.paypal_fee = toFloat(breakdown?.paypal_fee?.value);
+      result.gross_amount = toFloat(breakdown?.gross_amount?.value);
+      result.platform_fee = toFloat(
+        breakdown?.platform_fees?.[0]?.amount?.value,
+      );
+      result.currency = capture.amount?.currency_code ?? null;
+      result.trxn_status = capture.status ?? null;
+      result.custom_id = capture.custom_id ?? null;
+      result.invoice_id = capture.invoice_id ?? null;
+      result.paypal_create_time = toDate(capture.create_time);
+      result.paypal_update_time = toDate(capture.update_time);
+    }
+
+    result.merchant_id =
+      rawResponse.purchase_units?.[0]?.payee?.merchant_id ?? null;
+
+    return result;
+  }
+
+  // /v2/payments/authorizations/{id}/capture
+  if (resource === "authorizations" && action === "capture") {
+    const breakdown = rawResponse.seller_receivable_breakdown;
+    result.net_amount = toFloat(breakdown?.net_amount?.value);
+    result.paypal_fee = toFloat(breakdown?.paypal_fee?.value);
+    result.gross_amount = toFloat(breakdown?.gross_amount?.value);
+    result.platform_fee = toFloat(breakdown?.platform_fees?.[0]?.amount?.value);
+    result.currency = rawResponse.amount?.currency_code ?? null;
+    result.trxn_status = rawResponse.status ?? null;
+    result.merchant_id = rawResponse.payee?.merchant_id ?? null;
+    result.custom_id = rawResponse.custom_id ?? null;
+    result.invoice_id = rawResponse.invoice_id ?? null;
+    result.paypal_create_time = toDate(rawResponse.create_time);
+    result.paypal_update_time = toDate(rawResponse.update_time);
+
+    return result;
+  }
+
+  // /v2/payments/captures/{id}/refund
+  if (resource === "captures" && action === "refund") {
+    result.currency = rawResponse.amount?.currency_code ?? null;
+    result.gross_amount = toFloat(rawResponse.amount?.value);
+    result.trxn_status = rawResponse.status ?? null;
+
+    return result;
+  }
+
+  return result;
 };

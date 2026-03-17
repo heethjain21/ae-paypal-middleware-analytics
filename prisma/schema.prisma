@@ -22,15 +22,15 @@ enum RequestStatus {
 }
 
 model Request {
-  debug_id        String        @id @db.VarChar(64)
+  debug_id String @id @db.VarChar(64)
 
-  site_url        String
-  status          RequestStatus
+  site_url String
+  status   RequestStatus
 
-  path               String
-  method             String
-  code               Int
-  duration           Int
+  path     String
+  method   String
+  code     Int
+  duration Int
 
   paypal_request_id String?
 
@@ -41,9 +41,11 @@ model Request {
   error_message String?
   error_stack   Json?
 
-  is_sandbox Boolean @default(false)
-  plugin_version String
-  internal_request_id String
+  is_sandbox          Boolean @default(false)
+  plugin_version      String
+  internal_request_id String?
+
+  action_name String?
 
   created_at DateTime
   updated_at DateTime @default(now()) @updatedAt
@@ -54,6 +56,45 @@ model Request {
   @@index([path, created_at])
   @@index([created_at])
   @@index([is_sandbox, created_at])
-
   @@map("requests")
+}
+
+model Payment {
+  debug_id            String        @id @db.VarChar(64)
+  
+  site_url            String
+  req_status          RequestStatus
+  
+  path                String
+  duration            Int
+  paypal_request_id   String?
+
+  net_amount   Float?
+  paypal_fee   Float?
+  gross_amount Float?
+  platform_fee Float?
+  currency     String? @db.VarChar(3)
+
+  trxn_status        String?   @db.VarChar(32)
+  merchant_id        String?   @db.VarChar(64)
+  custom_id          String?   @db.VarChar(127)
+  invoice_id         String?   @db.VarChar(127)
+  paypal_create_time DateTime?
+  paypal_update_time DateTime?
+
+  is_sandbox          Boolean @default(false)
+  plugin_version      String
+  internal_request_id String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+
+  @@index([debug_id])
+  @@index([site_url, created_at])
+  @@index([req_status, created_at])
+  @@index([path, created_at])
+  @@index([trxn_status, created_at])
+  @@index([is_sandbox, created_at])
+  @@index([created_at])
+  @@map("payments")
 }
