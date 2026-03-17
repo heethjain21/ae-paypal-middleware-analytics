@@ -95,8 +95,16 @@ export const handler = async (
   console.log(`Processing ${event.Records.length} SQS messages`);
 
   const failedMessageIds = new Set<string>();
-  const requestItems: Array<{ record: SQSRecord; message: SQSMessage; debugId: string }> = [];
-  const paymentItems: Array<{ record: SQSRecord; message: SQSMessage; debugId: string }> = [];
+  const requestItems: Array<{
+    record: SQSRecord;
+    message: SQSMessage;
+    debugId: string;
+  }> = [];
+  const paymentItems: Array<{
+    record: SQSRecord;
+    message: SQSMessage;
+    debugId: string;
+  }> = [];
 
   for (const record of event.Records) {
     try {
@@ -110,12 +118,28 @@ export const handler = async (
         );
       }
 
+      // Many calls might just be for dns / ip related checks, and it returns body as an IP address
       if (messageData.table === "requests") {
+        const responseBody = messageData.data.response_body;
+        if (typeof responseBody === "string") {
+          try {
+            JSON.parse(responseBody.trim());
+          } catch {
+            // If JSON parse failed, it means its not a JSON string and some regular string
+            // Now, we check if its an IP addres like request, and if it is, its confirmed we can skip it
+            if (responseBody.split(".").length === 4) continue;
+          }
+        }
+
         const debugId = getDebugId(messageData.data);
         requestItems.push({ record, message: messageData, debugId });
         const method = messageData.data.request_method;
         const code = Number(messageData.data.response_status_code);
-        if (isPaymentPath(messageData.data.request_url) && method === 'POST' && code === 201) {
+        if (
+          isPaymentPath(messageData.data.request_url) &&
+          method === "POST" &&
+          code === 201
+        ) {
           paymentItems.push({ record, message: messageData, debugId });
         }
       } else {
@@ -181,20 +205,27 @@ const getPath = (url: string): string => {
 const extractError = (
   statusCode: number,
   responseBody: any,
-): { error_code: string | null; error_message: string | null; error_stack: any } => {
+): {
+  error_code: string | null;
+  error_message: string | null;
+  error_stack: any;
+} => {
   if (statusCode < 400 || !responseBody) {
     return { error_code: null, error_message: null, error_stack: null };
   }
+
+  const stack = responseBody.details ?? null;
+
   return {
     error_code: responseBody.name ?? responseBody.error ?? null,
-    error_message: responseBody.message ?? responseBody.error_description ?? null,
-    error_stack: responseBody.details ?? null,
+    error_message:
+      responseBody.message ?? responseBody.error_description ?? null,
+    error_stack: stack && Array.isArray(stack) ? { stack } : null,
   };
 };
 
 const getDebugId = (rawData: RequestData): string =>
-  rawData.response_headers?.["paypal-debug-id"] ?? 
-  crypto.randomUUID();
+  rawData.response_headers?.["paypal-debug-id"] ?? crypto.randomUUID();
 
 const isPaymentPath = (path: string): boolean => {
   try {
@@ -211,7 +242,10 @@ const isPaymentPath = (path: string): boolean => {
   }
 };
 
-const buildRequestRow = (rawData: RequestData, debugId: string): Insertable<RequestTable> => {
+const buildRequestRow = (
+  rawData: RequestData,
+  debugId: string,
+): Insertable<RequestTable> => {
   const responseStatusCode = Number(rawData.response_status_code);
 
   const status =
@@ -245,7 +279,10 @@ const buildRequestRow = (rawData: RequestData, debugId: string): Insertable<Requ
   };
 };
 
-const buildPaymentRow = (rawData: RequestData, debugId: string): Insertable<PaymentTable> => {
+const buildPaymentRow = (
+  rawData: RequestData,
+  debugId: string,
+): Insertable<PaymentTable> => {
   const financials = extractFinancials(
     rawData.request_url,
     toJson(rawData.response_body),
@@ -266,7 +303,7 @@ const buildPaymentRow = (rawData: RequestData, debugId: string): Insertable<Paym
     duration: Number(rawData.duration) || 0,
     paypal_request_id: rawData.request_headers?.["PayPal-Request-Id"] ?? null,
     ...financials,
-    is_sandbox: rawData.metadata.test_mode === 'yes',
+    is_sandbox: rawData.metadata.test_mode === "yes",
     plugin_version: rawData.metadata?.plugin_version,
     internal_request_id: rawData.request_id,
   };
@@ -325,7 +362,9 @@ const upsertPaymentsQuery = (rows: Insertable<PaymentTable>[]) =>
 const batchUpsertRequests = async (
   items: Array<{ record: SQSRecord; message: SQSMessage; debugId: string }>,
 ): Promise<BatchItemFailure[]> => {
-  const rows = items.map(({ message, debugId }) => buildRequestRow(message.data, debugId));
+  const rows = items.map(({ message, debugId }) =>
+    buildRequestRow(message.data, debugId),
+  );
 
   try {
     await upsertRequestsQuery(rows).execute();
@@ -342,7 +381,9 @@ const batchUpsertRequests = async (
     await Promise.all(
       items.map(async ({ record, message, debugId }) => {
         try {
-          await upsertRequestsQuery([buildRequestRow(message.data, debugId)]).execute();
+          await upsertRequestsQuery([
+            buildRequestRow(message.data, debugId),
+          ]).execute();
         } catch (err) {
           console.error(`Failed to process message ${record.messageId}:`, err);
           console.log(
@@ -361,7 +402,9 @@ const batchUpsertRequests = async (
 const batchUpsertPayments = async (
   items: Array<{ record: SQSRecord; message: SQSMessage; debugId: string }>,
 ): Promise<BatchItemFailure[]> => {
-  const rows = items.map(({ message, debugId }) => buildPaymentRow(message.data, debugId));
+  const rows = items.map(({ message, debugId }) =>
+    buildPaymentRow(message.data, debugId),
+  );
 
   try {
     await upsertPaymentsQuery(rows).execute();
@@ -378,7 +421,9 @@ const batchUpsertPayments = async (
     await Promise.all(
       items.map(async ({ record, message, debugId }) => {
         try {
-          await upsertPaymentsQuery([buildPaymentRow(message.data, debugId)]).execute();
+          await upsertPaymentsQuery([
+            buildPaymentRow(message.data, debugId),
+          ]).execute();
         } catch (err) {
           console.error(
             `Failed to process payment for message ${record.messageId}:`,
