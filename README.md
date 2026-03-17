@@ -104,3 +104,31 @@ npm run prisma:generate
 npm run prisma:migrate
 
 ```
+
+```bash
+
+# Sample Migration run script
+
+npm run prisma:migrate
+
+> analytics@1.0.0 prisma:migrate
+> prisma migrate dev
+
+Environment variables loaded from .env
+Prisma schema loaded from prisma/schema.prisma
+Datasource "db": PostgreSQL database "db-name", schema "public" at "db-url:5432"
+
+✔ Enter a name for the new migration: … 
+Applying migration `20260317162930`
+
+The following migration(s) have been created and applied from new schema changes:
+
+prisma/migrations/
+  └─ 20260317162930/
+    └─ migration.sql
+
+Your database is now in sync with your schema.
+
+✔ Generated Kysely types (2.3.0) to ./prisma/generated/types in 11ms
+
+```
