@@ -220,6 +220,14 @@ const extractError = (
     return { error_code: null, error_message: null, error_stack: null };
   }
 
+  if (statusCode === 404 && Object.keys(responseBody).length === 0) {
+    return {
+      error_code: "NOT_FOUND",
+      error_message: "The requested resource could not be found.",
+      error_stack: null,
+    };
+  }
+
   const stack = responseBody.details ?? null;
 
   return {
