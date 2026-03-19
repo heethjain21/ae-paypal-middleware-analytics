@@ -16,21 +16,16 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum RequestStatus {
-  SUCCESS
-  FAILED
-}
-
 model Request {
-  debug_id String @id @db.VarChar(64)
+  debug_id String @id
 
   site_url String
-  status   RequestStatus
+  status   String
 
-  path     String
-  method   String
-  code     Int
-  duration Int
+  path        String
+  method      String
+  status_code Int    @db.SmallInt
+  duration    Int
 
   paypal_request_id String?
 
@@ -47,52 +42,46 @@ model Request {
 
   action_name String?
 
-  created_at DateTime
-  updated_at DateTime @default(now()) @updatedAt
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
-  @@index([paypal_request_id, created_at])
-  @@index([site_url, created_at])
-  @@index([status, created_at])
-  @@index([path, created_at])
+  @@index([site_url, status, created_at])
+  @@index([path, status, created_at])
   @@index([created_at])
-  @@index([is_sandbox, created_at])
+  @@index([is_sandbox])
   @@map("requests")
 }
 
 model Payment {
-  debug_id String @id @db.VarChar(64)
+  capture_id String @id
 
-  site_url     String
-  reference_id String
+  site_url String
+  path     String
+  duration Int
 
-  path              String
-  duration          Int
-  paypal_request_id String?
-
-  net_amount   Float?
-  paypal_fee   Float?
-  gross_amount Float?
-  platform_fee Float?
+  net_amount   Decimal? @db.Decimal(19, 4)
+  paypal_fee   Decimal? @db.Decimal(19, 4)
+  gross_amount Decimal? @db.Decimal(19, 4)
+  platform_fee Decimal? @db.Decimal(19, 4)
   currency     String? @db.VarChar(3)
 
-  trxn_status        String?   @db.VarChar(32)
-  merchant_id        String?   @db.VarChar(64)
-  custom_id          String?   @db.VarChar(127)
-  invoice_id         String?   @db.VarChar(127)
-  paypal_create_time DateTime?
-  paypal_update_time DateTime?
+  status             String?
+  merchant_id        String?
+  custom_id          String?
+  invoice_id         String?
+  paypal_create_time DateTime? @db.Timestamptz(3)
+  paypal_update_time DateTime? @db.Timestamptz(3)
 
+  debug_id       String
   is_sandbox     Boolean @default(false)
   plugin_version String
 
-  created_at DateTime @default(now())
-  updated_at DateTime @default(now()) @updatedAt
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
+  @@index([site_url, status, created_at])
+  @@index([path, status, created_at])
   @@index([debug_id])
-  @@index([site_url, created_at])
-  @@index([path, created_at])
-  @@index([trxn_status, created_at])
-  @@index([is_sandbox, created_at])
-  @@index([created_at])
+  @@index([is_sandbox])
   @@map("payments")
 }

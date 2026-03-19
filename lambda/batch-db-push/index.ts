@@ -1,5 +1,5 @@
 import { Context, SQSEvent, SQSRecord } from "aws-lambda";
-import fs, { read } from "fs";
+import fs from "fs";
 import { Insertable, Kysely, PostgresDialect, sql } from "kysely";
 import { Pool } from "pg";
 import {
@@ -7,7 +7,6 @@ import {
   Request as RequestTable,
   Payment as PaymentTable,
 } from "./types/database.types";
-import { RequestStatus } from "./types/database.enums";
 
 /**
  * IMPORTANT:
@@ -24,7 +23,7 @@ const db = new Kysely<DB>({
 
       max: 3, // SAFE for Lambda
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
+      connectionTimeoutMillis: 30000,
 
       ssl: {
         rejectUnauthorized: true,
@@ -58,12 +57,13 @@ interface RequestData {
 }
 
 interface ExtractedFinancials {
+  capture_id: string;
   net_amount: number | null;
   paypal_fee: number | null;
   gross_amount: number | null;
   platform_fee: number | null;
   currency: string | null;
-  trxn_status: string | null;
+  status: string | null;
   merchant_id: string | null;
   custom_id: string | null;
   invoice_id: string | null;
@@ -89,6 +89,9 @@ export const handler = async (
   event: SQSEvent,
   context: Context,
 ): Promise<LambdaResponse> => {
+
+  let skipped = 0;
+
   // IMPORTANT for Lambda + DB pools
   context.callbackWaitsForEmptyEventLoop = false;
 
@@ -127,7 +130,10 @@ export const handler = async (
           } catch {
             // If JSON parse failed, it means its not a JSON string and some regular string
             // Now, we check if its an IP addres like request, and if it is, its confirmed we can skip it
-            if (responseBody.split(".").length === 4) continue;
+            if (responseBody.trim().length < 25 && responseBody.split(".").length === 4) {
+              skipped++;
+              continue;
+            }
           }
         }
 
@@ -163,7 +169,7 @@ export const handler = async (
   console.log(
     `Processed ${
       event.Records.length - failedMessageIds.size
-    } successfully, ${failedMessageIds.size} failed`,
+    } successfully, ${failedMessageIds.size} failed, ${skipped} skipped`,
   );
 
   return {
@@ -181,9 +187,10 @@ const toJson = (value: any) => {
   else return { body: value };
 };
 
-const toFloat = (value: string | null | undefined): number | null => {
+// Amounts stored as NUMERIC(19,4) — exact value as PayPal sends, no conversion needed.
+const toAmount = (value: string | number | null | undefined): number | null => {
   if (value == null) return null;
-  const n = parseFloat(value);
+  const n = typeof value === "number" ? value : parseFloat(value);
   return isNaN(n) ? null : n;
 };
 
@@ -248,9 +255,7 @@ const buildRequestRow = (
   const responseStatusCode = Number(rawData.response_status_code);
 
   const status =
-    responseStatusCode >= 200 && responseStatusCode < 300
-      ? RequestStatus.SUCCESS
-      : RequestStatus.FAILED;
+    responseStatusCode >= 200 && responseStatusCode < 300 ? "SUCCESS" : "FAILED";
 
   return {
     debug_id: debugId,
@@ -260,7 +265,7 @@ const buildRequestRow = (
 
     path: getPath(rawData.request_url),
     method: rawData.request_method,
-    code: responseStatusCode,
+    status_code: responseStatusCode,
     duration: Number(rawData.duration) || 0,
 
     paypal_request_id: rawData.request_headers?.["PayPal-Request-Id"] ?? null,
@@ -279,29 +284,24 @@ const buildRequestRow = (
   };
 };
 
-const buildPaymentRow = (
+const buildPaymentRows = (
   rawData: RequestData,
   debugId: string,
-): Insertable<PaymentTable> => {
-  const financials = extractFinancials(
+): Insertable<PaymentTable>[] => {
+  const financialsList = extractFinancials(
     rawData.request_url,
     toJson(rawData.response_body),
   );
-  
-  const paths = getPath(rawData.request_url).split('/');
-  const referenceId = paths[paths.length - 2];
 
-  return {
+  return financialsList.map((financials) => ({
     debug_id: debugId,
     site_url: rawData.metadata?.wp_home,
-    reference_id: referenceId,
     path: getPath(rawData.request_url),
     duration: Number(rawData.duration) || 0,
-    paypal_request_id: rawData.request_headers?.["PayPal-Request-Id"] ?? null,
     ...financials,
     is_sandbox: rawData.metadata.test_mode === "yes",
     plugin_version: rawData.metadata?.plugin_version,
-  };
+  }));
 };
 
 const upsertRequestsQuery = (rows: Insertable<RequestTable>[]) =>
@@ -314,7 +314,7 @@ const upsertRequestsQuery = (rows: Insertable<RequestTable>[]) =>
         status: sql`excluded.status`,
         path: sql`excluded.path`,
         method: sql`excluded.method`,
-        code: sql`excluded.code`,
+        status_code: sql`excluded.status_code`,
         duration: sql`excluded.duration`,
         paypal_request_id: sql`excluded.paypal_request_id`,
         raw_request: sql`excluded.raw_request`,
@@ -334,18 +334,17 @@ const upsertPaymentsQuery = (rows: Insertable<PaymentTable>[]) =>
     .insertInto("payments")
     .values(rows)
     .onConflict((oc) =>
-      oc.column("debug_id").doUpdateSet({
+      oc.column("capture_id").doUpdateSet({
+        debug_id: sql`excluded.debug_id`,
         path: sql`excluded.path`,
         site_url: sql`excluded.site_url`,
         duration: sql`excluded.duration`,
-        reference_id: sql`excluded.duration`,
-        paypal_request_id: sql`excluded.paypal_request_id`,
         net_amount: sql`excluded.net_amount`,
         paypal_fee: sql`excluded.paypal_fee`,
         gross_amount: sql`excluded.gross_amount`,
         platform_fee: sql`excluded.platform_fee`,
         currency: sql`excluded.currency`,
-        trxn_status: sql`excluded.trxn_status`,
+        status: sql`excluded.status`,
         merchant_id: sql`excluded.merchant_id`,
         custom_id: sql`excluded.custom_id`,
         invoice_id: sql`excluded.invoice_id`,
@@ -397,9 +396,14 @@ const batchUpsertRequests = async (
 const batchUpsertPayments = async (
   items: Array<{ record: SQSRecord; message: SQSMessage; debugId: string }>,
 ): Promise<BatchItemFailure[]> => {
-  const rows = items.map(({ message, debugId }) =>
-    buildPaymentRow(message.data, debugId),
+  // One message can produce multiple rows (multiple captures / purchase_units)
+  const rowItems = items.flatMap(({ record, message, debugId }) =>
+    buildPaymentRows(message.data, debugId).map((row) => ({ record, row })),
   );
+
+  if (rowItems.length === 0) return [];
+
+  const rows = rowItems.map(({ row }) => row);
 
   try {
     await upsertPaymentsQuery(rows).execute();
@@ -412,19 +416,21 @@ const batchUpsertPayments = async (
     );
 
     const failures: BatchItemFailure[] = [];
+    const failedMessageIds = new Set<string>();
 
     await Promise.all(
-      items.map(async ({ record, message, debugId }) => {
+      rowItems.map(async ({ record, row }) => {
         try {
-          await upsertPaymentsQuery([
-            buildPaymentRow(message.data, debugId),
-          ]).execute();
+          await upsertPaymentsQuery([row]).execute();
         } catch (err) {
           console.error(
             `Failed to process payment for message ${record.messageId}:`,
             err,
           );
-          failures.push({ itemIdentifier: record.messageId });
+          if (!failedMessageIds.has(record.messageId)) {
+            failedMessageIds.add(record.messageId);
+            failures.push({ itemIdentifier: record.messageId });
+          }
         }
       }),
     );
@@ -436,22 +442,8 @@ const batchUpsertPayments = async (
 const extractFinancials = (
   path: string,
   rawResponse: any,
-): ExtractedFinancials => {
-  const result: ExtractedFinancials = {
-    net_amount: null,
-    paypal_fee: null,
-    gross_amount: null,
-    platform_fee: null,
-    currency: null,
-    trxn_status: null,
-    merchant_id: null,
-    custom_id: null,
-    invoice_id: null,
-    paypal_create_time: null,
-    paypal_update_time: null,
-  };
-
-  if (!rawResponse || typeof rawResponse !== "object") return result;
+): ExtractedFinancials[] => {
+  if (!rawResponse || typeof rawResponse !== "object") return [];
 
   const segments = new URL(path).pathname.split("/").filter(Boolean);
 
@@ -459,58 +451,91 @@ const extractFinancials = (
   const resource = segments.at(-3);
 
   // /v2/checkout/orders/{id}/capture
+  // Can have multiple purchase_units, each with multiple captures
   if (resource === "orders" && action === "capture") {
-    const capture = rawResponse.purchase_units?.[0]?.payments?.captures?.[0];
+    const results: ExtractedFinancials[] = [];
 
-    if (capture) {
-      const breakdown = capture.seller_receivable_breakdown;
-      result.net_amount = toFloat(breakdown?.net_amount?.value);
-      result.paypal_fee = toFloat(breakdown?.paypal_fee?.value);
-      result.gross_amount = breakdown ? toFloat(breakdown?.gross_amount?.value) : capture.amount?.value ?? null; // for pending/partial completed trxn, we only have gross_amount and no seller_receivable_breakdown
-      result.platform_fee = toFloat(
-        breakdown?.platform_fees?.[0]?.amount?.value,
-      );
-      result.currency = capture.amount?.currency_code ?? null;
-      result.trxn_status = capture.status ?? null;
-      result.custom_id = capture.custom_id ?? null;
-      result.invoice_id = capture.invoice_id ?? null;
-      result.paypal_create_time = toDate(capture.create_time);
-      result.paypal_update_time = toDate(capture.update_time);
+    for (const purchaseUnit of rawResponse.purchase_units ?? []) {
+      const merchantId = purchaseUnit.payee?.merchant_id ?? null;
+
+      for (const capture of purchaseUnit.payments?.captures ?? []) {
+        
+        // Skip failed captures
+        if (!capture.id || capture.status === "FAILED") continue;
+
+        const currency = capture.amount?.currency_code ?? null;
+        const breakdown = capture.seller_receivable_breakdown;
+        results.push({
+          capture_id: capture.id,
+          net_amount: toAmount(breakdown?.net_amount?.value),
+          paypal_fee: toAmount(breakdown?.paypal_fee?.value),
+          gross_amount: breakdown
+            ? toAmount(breakdown?.gross_amount?.value)
+            : toAmount(capture.amount?.value), // for pending/partial completed trxn, we only have gross_amount and no seller_receivable_breakdown
+          platform_fee: toAmount(breakdown?.platform_fees?.[0]?.amount?.value),
+          currency,
+          status: capture.status ?? null,
+          merchant_id: merchantId,
+          custom_id: capture.custom_id ?? null,
+          invoice_id: capture.invoice_id ?? null,
+          paypal_create_time: toDate(capture.create_time),
+          paypal_update_time: toDate(capture.update_time),
+        });
+      }
     }
 
-    result.merchant_id =
-      rawResponse.purchase_units?.[0]?.payee?.merchant_id ?? null;
-
-    return result;
+    return results;
   }
 
   // /v2/payments/authorizations/{id}/capture
   if (resource === "authorizations" && action === "capture") {
-    const breakdown = rawResponse.seller_receivable_breakdown;
-    result.net_amount = toFloat(breakdown?.net_amount?.value);
-    result.paypal_fee = toFloat(breakdown?.paypal_fee?.value);
-    result.gross_amount = breakdown ? toFloat(breakdown?.gross_amount?.value) : rawResponse.amount?.value ?? null; // for pending/partial completed trxn, we only have gross_amount and no seller_receivable_breakdown
-    result.platform_fee = toFloat(breakdown?.platform_fees?.[0]?.amount?.value);
-    result.currency = rawResponse.amount?.currency_code ?? null;
-    result.trxn_status = rawResponse.status ?? null;
-    result.merchant_id = rawResponse.payee?.merchant_id ?? null;
-    result.custom_id = rawResponse.custom_id ?? null;
-    result.invoice_id = rawResponse.invoice_id ?? null;
-    result.paypal_create_time = toDate(rawResponse.create_time);
-    result.paypal_update_time = toDate(rawResponse.update_time);
+    if (!rawResponse.id || rawResponse.status === "FAILED") return [];
 
-    return result;
+    const currency = rawResponse.amount?.currency_code ?? null;
+    const breakdown = rawResponse.seller_receivable_breakdown;
+    return [
+      {
+        capture_id: rawResponse.id,
+        net_amount: toAmount(breakdown?.net_amount?.value),
+        paypal_fee: toAmount(breakdown?.paypal_fee?.value),
+        gross_amount: breakdown
+          ? toAmount(breakdown?.gross_amount?.value)
+          : toAmount(rawResponse.amount?.value), // for pending/partial completed trxn, we only have gross_amount and no seller_receivable_breakdown
+        platform_fee: toAmount(breakdown?.platform_fees?.[0]?.amount?.value),
+        currency,
+        status: rawResponse.status ?? null,
+        merchant_id: rawResponse.payee?.merchant_id ?? null,
+        custom_id: rawResponse.custom_id ?? null,
+        invoice_id: rawResponse.invoice_id ?? null,
+        paypal_create_time: toDate(rawResponse.create_time),
+        paypal_update_time: toDate(rawResponse.update_time),
+      },
+    ];
   }
 
   // /v2/payments/captures/{id}/refund
   if (resource === "captures" && action === "refund") {
-    const refundAmount = toFloat(rawResponse.amount?.value);
-    result.currency = rawResponse.amount?.currency_code ?? null;
-    result.gross_amount = refundAmount ? refundAmount * -1 : null;
-    result.trxn_status = rawResponse.status ?? null;
+    if (!rawResponse.id || rawResponse.status === "FAILED") return [];
 
-    return result;
+    const currency = rawResponse.amount?.currency_code ?? null;
+    const refundAmount = toAmount(rawResponse.amount?.value);
+    return [
+      {
+        capture_id: rawResponse.id,
+        net_amount: null,
+        paypal_fee: null,
+        gross_amount: refundAmount != null ? refundAmount * -1 : null,
+        platform_fee: null,
+        currency,
+        status: rawResponse.status ?? null,
+        merchant_id: null,
+        custom_id: null,
+        invoice_id: null,
+        paypal_create_time: null,
+        paypal_update_time: null,
+      },
+    ];
   }
 
-  return result;
+  return [];
 };
