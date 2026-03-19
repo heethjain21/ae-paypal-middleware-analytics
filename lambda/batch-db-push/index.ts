@@ -287,25 +287,20 @@ const buildPaymentRow = (
     rawData.request_url,
     toJson(rawData.response_body),
   );
-
-  const responseStatusCode = Number(rawData.response_status_code);
-
-  const reqStatus =
-    responseStatusCode >= 200 && responseStatusCode < 300
-      ? RequestStatus.SUCCESS
-      : RequestStatus.FAILED;
+  
+  const paths = getPath(rawData.request_url).split('/');
+  const referenceId = paths[paths.length - 2];
 
   return {
     debug_id: debugId,
     site_url: rawData.metadata?.wp_home,
-    req_status: reqStatus,
+    reference_id: referenceId,
     path: getPath(rawData.request_url),
     duration: Number(rawData.duration) || 0,
     paypal_request_id: rawData.request_headers?.["PayPal-Request-Id"] ?? null,
     ...financials,
     is_sandbox: rawData.metadata.test_mode === "yes",
     plugin_version: rawData.metadata?.plugin_version,
-    internal_request_id: rawData.request_id,
   };
 };
 
@@ -343,8 +338,8 @@ const upsertPaymentsQuery = (rows: Insertable<PaymentTable>[]) =>
         path: sql`excluded.path`,
         site_url: sql`excluded.site_url`,
         duration: sql`excluded.duration`,
+        reference_id: sql`excluded.duration`,
         paypal_request_id: sql`excluded.paypal_request_id`,
-        internal_request_id: sql`excluded.internal_request_id`,
         net_amount: sql`excluded.net_amount`,
         paypal_fee: sql`excluded.paypal_fee`,
         gross_amount: sql`excluded.gross_amount`,

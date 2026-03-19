@@ -60,14 +60,14 @@ model Request {
 }
 
 model Payment {
-  debug_id            String        @id @db.VarChar(64)
-  
-  site_url            String
-  req_status          RequestStatus
-  
-  path                String
-  duration            Int
-  paypal_request_id   String?
+  debug_id String @id @db.VarChar(64)
+
+  site_url     String
+  reference_id String
+
+  path              String
+  duration          Int
+  paypal_request_id String?
 
   net_amount   Float?
   paypal_fee   Float?
@@ -82,16 +82,14 @@ model Payment {
   paypal_create_time DateTime?
   paypal_update_time DateTime?
 
-  is_sandbox          Boolean @default(false)
-  plugin_version      String
-  internal_request_id String?
+  is_sandbox     Boolean @default(false)
+  plugin_version String
 
   created_at DateTime @default(now())
   updated_at DateTime @default(now()) @updatedAt
 
   @@index([debug_id])
   @@index([site_url, created_at])
-  @@index([req_status, created_at])
   @@index([path, created_at])
   @@index([trxn_status, created_at])
   @@index([is_sandbox, created_at])

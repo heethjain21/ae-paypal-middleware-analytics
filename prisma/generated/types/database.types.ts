@@ -9,7 +9,7 @@ import type { RequestStatus } from "./database.enums";
 export type Payment = {
     debug_id: string;
     site_url: string;
-    req_status: RequestStatus;
+    reference_id: string;
     path: string;
     duration: number;
     paypal_request_id: string | null;
@@ -26,7 +26,6 @@ export type Payment = {
     paypal_update_time: Timestamp | null;
     is_sandbox: Generated<boolean>;
     plugin_version: string;
-    internal_request_id: string | null;
     created_at: Generated<Timestamp>;
     updated_at: Generated<Timestamp>;
 };

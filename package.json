@@ -9,7 +9,8 @@
   "scripts": {
     "prisma:studio": "prisma studio",
     "prisma:generate": "prisma generate && node copy-db-types.js",
-    "prisma:migrate": "prisma migrate dev"
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy"
   },
   "keywords": [],
   "devDependencies": {
