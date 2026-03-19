@@ -137,8 +137,7 @@ export const handler = async (
         const code = Number(messageData.data.response_status_code);
         if (
           isPaymentPath(messageData.data.request_url) &&
-          method === "POST" &&
-          code === 201
+          method === "POST" && code > 200 && code < 300
         ) {
           paymentItems.push({ record, message: messageData, debugId });
         }
@@ -472,7 +471,7 @@ const extractFinancials = (
       const breakdown = capture.seller_receivable_breakdown;
       result.net_amount = toFloat(breakdown?.net_amount?.value);
       result.paypal_fee = toFloat(breakdown?.paypal_fee?.value);
-      result.gross_amount = toFloat(breakdown?.gross_amount?.value);
+      result.gross_amount = breakdown ? toFloat(breakdown?.gross_amount?.value) : capture.amount?.value ?? null; // for pending/partial completed trxn, we only have gross_amount and no seller_receivable_breakdown
       result.platform_fee = toFloat(
         breakdown?.platform_fees?.[0]?.amount?.value,
       );
@@ -495,7 +494,7 @@ const extractFinancials = (
     const breakdown = rawResponse.seller_receivable_breakdown;
     result.net_amount = toFloat(breakdown?.net_amount?.value);
     result.paypal_fee = toFloat(breakdown?.paypal_fee?.value);
-    result.gross_amount = toFloat(breakdown?.gross_amount?.value);
+    result.gross_amount = breakdown ? toFloat(breakdown?.gross_amount?.value) : rawResponse.amount?.value ?? null; // for pending/partial completed trxn, we only have gross_amount and no seller_receivable_breakdown
     result.platform_fee = toFloat(breakdown?.platform_fees?.[0]?.amount?.value);
     result.currency = rawResponse.amount?.currency_code ?? null;
     result.trxn_status = rawResponse.status ?? null;
