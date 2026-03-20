@@ -4,9 +4,9 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   : ColumnType<T, T | undefined, T>;
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
-export type Payment = {
+export type PPCP_Payment = {
     capture_id: string;
-    site_url: string;
+    site_url: string | null;
     path: string;
     duration: number;
     net_amount: number | null;
@@ -22,13 +22,13 @@ export type Payment = {
     paypal_update_time: Timestamp | null;
     debug_id: string;
     is_sandbox: Generated<boolean>;
-    plugin_version: string;
+    plugin_version: string | null;
     created_at: Generated<Timestamp>;
     updated_at: Generated<Timestamp>;
 };
-export type Request = {
+export type PPCP_Request = {
     debug_id: string;
-    site_url: string;
+    site_url: string | null;
     status: string;
     path: string;
     method: string;
@@ -41,13 +41,13 @@ export type Request = {
     error_message: string | null;
     error_stack: unknown | null;
     is_sandbox: Generated<boolean>;
-    plugin_version: string;
+    plugin_version: string | null;
     internal_request_id: string | null;
     action_name: string | null;
     created_at: Generated<Timestamp>;
     updated_at: Generated<Timestamp>;
 };
 export type DB = {
-    payments: Payment;
-    requests: Request;
+    ppcp_payments: PPCP_Payment;
+    ppcp_requests: PPCP_Request;
 };

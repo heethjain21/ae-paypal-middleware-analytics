@@ -16,10 +16,10 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Request {
+model PPCP_Request {
   debug_id String @id
 
-  site_url String
+  site_url String?
   status   String
 
   path        String
@@ -37,7 +37,7 @@ model Request {
   error_stack   Json?
 
   is_sandbox          Boolean @default(false)
-  plugin_version      String
+  plugin_version      String?
   internal_request_id String?
 
   action_name String?
@@ -49,13 +49,13 @@ model Request {
   @@index([path, status, created_at])
   @@index([created_at])
   @@index([is_sandbox])
-  @@map("requests")
+  @@map("ppcp_requests")
 }
 
-model Payment {
+model PPCP_Payment {
   capture_id String @id
 
-  site_url String
+  site_url String?
   path     String
   duration Int
 
@@ -74,7 +74,7 @@ model Payment {
 
   debug_id       String
   is_sandbox     Boolean @default(false)
-  plugin_version String
+  plugin_version String?
 
   created_at DateTime @default(now()) @db.Timestamptz(3)
   updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(3)
@@ -83,5 +83,5 @@ model Payment {
   @@index([path, status, created_at])
   @@index([debug_id])
   @@index([is_sandbox])
-  @@map("payments")
+  @@map("ppcp_payments")
 }
