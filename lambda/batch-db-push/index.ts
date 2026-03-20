@@ -72,7 +72,7 @@ interface ExtractedFinancials {
 }
 
 interface SQSMessage {
-  table: "requests";
+  table: "requests" | "ppcp_requests";
   operation: "upsert" | "delete";
   data: RequestData;
 }
@@ -122,7 +122,7 @@ export const handler = async (
       }
 
       // Many calls might just be for dns / ip related checks, and it returns body as an IP address
-      if (messageData.table === "requests") {
+      if (messageData.table === "requests" || messageData.table === "ppcp_requests") {
         const responseBody = messageData.data.response_body;
         if (typeof responseBody === "string") {
           try {
@@ -156,20 +156,36 @@ export const handler = async (
     }
   }
 
+  let failedRequests = [];
+  let failedPayments = [];
+
   if (requestItems.length > 0) {
     const failures = await batchUpsertRequests(requestItems);
-    failures.forEach((f) => failedMessageIds.add(f.itemIdentifier));
+    failures.forEach((f) => {
+      failedRequests.push(f.itemIdentifier);
+      failedMessageIds.add(f.itemIdentifier);
+    });
   }
 
   if (paymentItems.length > 0) {
     const failures = await batchUpsertPayments(paymentItems);
-    failures.forEach((f) => failedMessageIds.add(f.itemIdentifier));
+    failures.forEach((f) => {
+      failedPayments.push(f.itemIdentifier);
+      failedMessageIds.add(f.itemIdentifier);
+    });
   }
 
   console.log(
-    `Processed ${
-      event.Records.length - failedMessageIds.size
-    } successfully, ${failedMessageIds.size} failed, ${skipped} skipped`,
+    JSON.stringify({
+      msg: "processing_result",
+      total_messages: event.Records.length,
+      skipped_messages: skipped,
+      requests_to_save: requestItems.length,
+      requests_actually_saved: requestItems.length - failedRequests.length,
+      payments_to_save: paymentItems.length,
+      payments_actually_saved: paymentItems.length - failedPayments.length,
+      total_failed_messages: failedMessageIds.size,
+    }),
   );
 
   return {
