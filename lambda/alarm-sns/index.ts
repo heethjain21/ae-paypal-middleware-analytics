@@ -2,17 +2,23 @@ import { SNSClient, PublishCommand } from "@aws-sdk/client-sns";
 import {
   CloudWatchLogsClient,
   FilterLogEventsCommand,
+  type FilteredLogEvent,
 } from "@aws-sdk/client-cloudwatch-logs";
 
 const snsClient = new SNSClient({ region: process.env.AWS_REGION });
 const logsClient = new CloudWatchLogsClient({ region: process.env.AWS_REGION });
 
 // ===== CONFIGURATION =====
-const PROJECT_PREFIXES = ["ae-prod-paypal-middleware"];
+const PROJECT_PREFIXES: string[] = ["ae-prod-paypal-middleware"];
 
+interface AlarmLogConfig {
+  logGroupName: string;
+  filterPattern: string;
+  lookbackMinutes: number;
+}
 
 // Map alarm names to their log group and filter pattern
-const ALARM_LOG_CONFIG = {
+const ALARM_LOG_CONFIG: Record<string, AlarmLogConfig> = {
   "ae-prod-paypal-middleware-lambda-fatal-error": {
     logGroupName: "/aws/lambda/PayPalMerchantIntegration",
     filterPattern: "fatal_error",
@@ -21,7 +27,34 @@ const ALARM_LOG_CONFIG = {
 };
 // =========================================================
 
-export const handler = async (event) => {
+interface AlarmState {
+  timestamp: string;
+  [key: string]: unknown;
+}
+
+interface AlarmConfiguration {
+  description?: string;
+  [key: string]: unknown;
+}
+
+interface AlarmData {
+  alarmName: string;
+  state: AlarmState;
+  configuration: AlarmConfiguration;
+  [key: string]: unknown;
+}
+
+interface CloudWatchAlarmEvent {
+  alarmData: AlarmData;
+  [key: string]: unknown;
+}
+
+interface HandlerResponse {
+  statusCode: number;
+  body: string;
+}
+
+export const handler = async (event: CloudWatchAlarmEvent): Promise<HandlerResponse> => {
   try {
     console.log(
       "Received CloudWatch Alarm event:",
@@ -98,7 +131,7 @@ export const handler = async (event) => {
 /**
  * Fetch recent log events matching the alarm's filter pattern
  */
-async function fetchMatchingLogs(alarmName, alarmData) {
+async function fetchMatchingLogs(alarmName: string, alarmData: AlarmData): Promise<string | null> {
   const config = ALARM_LOG_CONFIG[alarmName];
 
   if (!config) {
@@ -126,61 +159,65 @@ async function fetchMatchingLogs(alarmName, alarmData) {
 
     const response = await logsClient.send(command);
 
-    const events = response.events || [];
+    const events: FilteredLogEvent[] = response.events || [];
 
     if (events.length === 0) {
       return "Log Details: No matching log entries found when querying in the past 3 minutes.";
     }
 
-
     const lines = events.map((evt) => {
-      const parts = evt.message.split('\t');
-      const lambdaRequestId = parts.length >= 2 ? parts[1] : 'N/A';
+      const parts = (evt.message ?? "").split("\t");
+      const lambdaRequestId = parts.length >= 2 ? parts[1] : "N/A";
 
       // The JSON payload is typically the last tab-delimited part
-      let internalRequestId = '';
-      let logBody = parts.length >= 4 ? parts.slice(3).join('\t').trim() : evt.message;
-      logBody = JSON.parse(logBody);
+      let internalRequestId = "";
+      let logBody: string = parts.length >= 4 ? parts.slice(3).join("\t").trim() : (evt.message ?? "");
+      let parsedLog: Record<string, unknown>;
 
       try {
-        internalRequestId = logBody?.requestId;
-        logBody = JSON.stringify(logBody, null, 2);
+        parsedLog = JSON.parse(logBody) as Record<string, unknown>;
+        internalRequestId = (parsedLog?.requestId as string) ?? "";
+        logBody = JSON.stringify(parsedLog, null, 2);
       } catch {
-        logBody = evt.message;
+        logBody = evt.message ?? "";
       }
 
-      const logStreamUrl = buildCloudWatchUrl(config.logGroupName, evt.logStreamName, lambdaRequestId);
+      const logStreamUrl = buildCloudWatchUrl(
+        config.logGroupName,
+        evt.logStreamName ?? "",
+        lambdaRequestId,
+      );
 
       return (
         `\n\nLog Details:` +
         `\n - Event Id: ${lambdaRequestId}` +
         `\n - Request Id: ${internalRequestId}` +
-        `\n - Timestamp: ${evt.timestamp ? new Date().toISOString().split('T').join(' ') + ' UTC' : "N/A"}` +
+        `\n - Timestamp: ${evt.timestamp ? new Date().toISOString().split("T").join(" ") + " UTC" : "N/A"}` +
         // `\n - Log Stream Name: ${evt.logStreamName}` +
         `\n - Log Stream: ${logStreamUrl}`
         // `\n - Raw Log: \n${logBody}`
       );
     });
 
-    return lines.join('');
+    return lines.join("");
   } catch (error) {
     console.error(`Error fetching logs for ${alarmName}:`, error);
-    return `Failed to fetch logs: ${error.message}`;
+    return `Failed to fetch logs: ${(error as Error).message}`;
   }
 }
 
-function buildCloudWatchUrl(logGroupName, logStreamName, filterValue) {
-  function encode(str) {
-      return encodeURIComponent(str).replace(/%/g, '$25');
+function buildCloudWatchUrl(logGroupName: string, logStreamName: string, filterValue: string): string {
+  function encode(str: string): string {
+    return encodeURIComponent(str).replace(/%/g, "$25");
   }
 
-  const region = process.env.AWS_REGION || 'us-east-2';
+  const region = process.env.AWS_REGION || "us-east-2";
   const quotedFilter = `"${filterValue}"`;
 
   return `https://${region}.console.aws.amazon.com/cloudwatch/home?region=${region}#logsV2:log-groups/log-group/${encode(logGroupName)}/log-events/${encode(logStreamName)}?filterPattern=${encode(quotedFilter)}`;
 }
 
-function findMatchingPrefix(alarmName) {
+function findMatchingPrefix(alarmName: string): string | null {
   const sortedPrefixes = [...PROJECT_PREFIXES].sort(
     (a, b) => b.length - a.length,
   );
