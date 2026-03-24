@@ -10,12 +10,14 @@ const db = new Kysely<DB>({
     pool: new Pool({
       user: process.env.AWS_RDS_DB_USER,
       password: process.env.AWS_RDS_DB_PASSWORD,
-      host: process.env.AWS_RDS_DB_URL, // db_url.rds.amazonaws.com
+      host: process.env.AWS_RDS_DB_URL,
       database: process.env.AWS_RDS_DB_NAME,
       port: 5432,
-      max: 100, // Maximum number of connections in the pool
+
+      max: 3, // SAFE for Lambda
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
+      connectionTimeoutMillis: 30000,
+
       ssl: {
         rejectUnauthorized: true,
         ca: fs.readFileSync("rds-us-east-2-bundle.pem").toString(),
@@ -60,21 +62,21 @@ export const handler = async (
 };
 
 const cleanupOldRequests = async (): Promise<{ deletedCount: number }> => {
-  // Calculate the date 30 days ago
-  const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  // Calculate the date 90 days ago
+  const ninetyDaysAgo = new Date();
+  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
 
   console.log(
-    `Deleting successful requests older than: ${thirtyDaysAgo.toISOString()}`
+    `Deleting successful requests older than: ${ninetyDaysAgo.toISOString()}`
   );
 
   try {
     // Delete requests with successful status (status_code 200-299) that are older than 30 days
     const result = await db
-      .deleteFrom('requests')
-      .where("code", ">=", 200)
-      .where("code", "<", 300)
-      .where("created_at", "<", thirtyDaysAgo)
+      .deleteFrom('ppcp_requests')
+      .where("status_code", ">=", 200)
+      .where("status_code", "<", 300)
+      .where("created_at", "<", ninetyDaysAgo)
       .execute();
 
     const deletedCount = result.length;
