@@ -4,8 +4,8 @@ import { Insertable, Kysely, PostgresDialect, sql } from "kysely";
 import { Pool } from "pg";
 import {
   DB,
-  Request as RequestTable,
-  Payment as PaymentTable,
+  PPCP_Request as RequestTable,
+  PPCP_Payment as PaymentTable,
 } from "./types/database.types";
 
 /**
@@ -38,8 +38,8 @@ interface RequestData {
 
   metadata: {
     test_mode: "yes" | "no";
-    wp_home: string;
-    plugin_version: string;
+    wp_home: string | null;
+    plugin_version: string | null;
   };
 
   request_url: string;
@@ -257,6 +257,13 @@ const extractError = (
 const getDebugId = (rawData: RequestData): string =>
   rawData.response_headers?.["paypal-debug-id"] ?? crypto.randomUUID();
 
+const getIsSandbox = (rawData: RequestData): boolean =>
+  rawData.metadata?.test_mode === 'yes' || rawData.request_url.includes('sandbox');
+
+const getPluginVersion = (rawData: RequestData): string =>
+  rawData.metadata?.plugin_version ?? rawData.request_headers?.['plugin_version_id'] ?? null;
+
+
 const isPaymentPath = (path: string): boolean => {
   try {
     const segments = new URL(path).pathname.split("/").filter(Boolean);
@@ -278,13 +285,17 @@ const buildRequestRow = (
 ): Insertable<RequestTable> => {
   const responseStatusCode = Number(rawData.response_status_code);
 
+  if (!rawData.metadata?.wp_home) {
+    console.log('site_url is missing, checking from headers', rawData.request_headers);
+  }
+
   const status =
     responseStatusCode >= 200 && responseStatusCode < 300 ? "SUCCESS" : "FAILED";
 
   return {
     debug_id: debugId,
 
-    site_url: rawData.metadata.wp_home,
+    site_url: rawData.metadata?.wp_home,
     status,
 
     path: getPath(rawData.request_url),
@@ -299,8 +310,8 @@ const buildRequestRow = (
 
     ...extractError(responseStatusCode, toJson(rawData.response_body)),
 
-    is_sandbox: rawData.metadata.test_mode === "yes",
-    plugin_version: rawData.metadata.plugin_version,
+    is_sandbox: getIsSandbox(rawData),
+    plugin_version: getPluginVersion(rawData),
     internal_request_id: rawData.request_id,
     action_name: rawData.request_action_name,
 
@@ -323,14 +334,14 @@ const buildPaymentRows = (
     path: getPath(rawData.request_url),
     duration: Number(rawData.duration) || 0,
     ...financials,
-    is_sandbox: rawData.metadata.test_mode === "yes",
-    plugin_version: rawData.metadata?.plugin_version,
+    is_sandbox: getIsSandbox(rawData),
+    plugin_version: getPluginVersion(rawData),
   }));
 };
 
 const upsertRequestsQuery = (rows: Insertable<RequestTable>[]) =>
   db
-    .insertInto("requests")
+    .insertInto("ppcp_requests")
     .values(rows)
     .onConflict((oc) =>
       oc.column("debug_id").doUpdateSet({
@@ -355,7 +366,7 @@ const upsertRequestsQuery = (rows: Insertable<RequestTable>[]) =>
 
 const upsertPaymentsQuery = (rows: Insertable<PaymentTable>[]) =>
   db
-    .insertInto("payments")
+    .insertInto("ppcp_payments")
     .values(rows)
     .onConflict((oc) =>
       oc.column("capture_id").doUpdateSet({
