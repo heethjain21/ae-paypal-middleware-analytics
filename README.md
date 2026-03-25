@@ -38,25 +38,29 @@ Note:
 
 ## 2. System Architecture
 
-<img width="1317" height="995" alt="angelleye-paypal-analytics" src="https://github.com/user-attachments/assets/ffa7dd54-82a2-4eeb-a72f-b3b064f52d79" />
+<img width="1383" height="1232" alt="angelleye-paypal-analytics-2" src="https://github.com/user-attachments/assets/c4ca7065-ecae-4f73-b1d7-ee7b1e56744e" />
 
 ## 3. Database Schema
 
-<img width="250" alt="Lean Software Dev - 2026-03-11 at 11 08 15@2x" src="https://github.com/user-attachments/assets/13c82d76-b55e-4b36-a75b-d5cc4fa0f501" />
+<img width="1502" height="1094" alt="db-schema" src="https://github.com/user-attachments/assets/3b96e265-2874-406f-ace3-ca72a9addb0b" />
 
 ## 4. Services
 
-- Lambda (2 instance):
+- Lambda (3 instances):
   - Cleanup old DB records/requests logs cron
-  - Batch DB Push cron (receives batch data from SQS and pushes to RDS)
+  - Batch DB Push PPCP (receives batch data from SQS and pushes to RDS)
+  - Batch DB Push All Payments (receives batch data from SQS and pushes to RDS)
 - Event Bridge Rules (1 instance):
   - Cron for cleanup old DB records (runs once a day)
-- SQS (1 instance):
-  - For Batch queue (this is for batch insert/upsert in the RDS via lambda)
+- SQS (4 instances): (all of them are for batch insert/upsert in the RDS via lambda)
+  - For PPCP Batch queue
+  - For PPCP Batch queue DLQ
+  - For All Payments Batch queue
+  - For All Payments Batch queue DLQ
 - RDS (PostgreSQL) (1 instance):
-  - For read-only analytics purposes to store paypal request logs
+  - For analytics purposes to store paypal request logs
 - Cloudwatch:
-  - Logs (2 lambda)
+  - Logs (3 lambda)
   - Metrics (basic/default) (for services)
 
 ## 5. Build & Deployments
@@ -93,23 +97,32 @@ Since these are just deploy and forget (with rare changes), and working independ
 
 ### 5.2 Database Migrations
 
+- Generate a new password for postgres / use existing user
+- Update the security group to temporarily allow access from your IP only with /32 CIDR block (this is very very critical, as RDS is publically exposed)
+- You can also select `My Ip` in the security group inbound rules when added a new rule, which automatically uses /32 CIDR block. Example of /32 CIDR block: `192.168.1.100/32`
+- Once migrations are done, delete your ip from the security group inbound
+
+Note: Since our RDS is publically accessible, security groups are the only line of defence, so be very very careful when updating the inbound access rules
+
 ```bash
 
 # 1. After making the changes in schema.prisma, generate new types
 npm run prisma:generate
 
-# 2. Update .env file with the database url
+# 2. Generate and update .env file with the database url
+cp .env.example .env
 
 # 3. Run migrations (skip name for migration, to keep it default with timstamp)
-npm run prisma:migrate
+npm run prisma:migrate:dev # for dev
+npm run prisma:migrate:deploy # for prod
 
 ```
 
 ```bash
 
-# Sample Migration run script
+# Sample Migration run script (dev mode)
 
-npm run prisma:migrate
+npm run prisma:migrate:dev
 
 > analytics@1.0.0 prisma:migrate
 > prisma migrate dev
