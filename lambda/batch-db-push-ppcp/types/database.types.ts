@@ -5,15 +5,16 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
 export type All_Payment = {
-    capture_id: string;
+    trxn_id: string;
     site_url: string | null;
     merchant_id: string | null;
-    request_status: string | null;
+    req_status: string | null;
     gross_amount: number | null;
     currency: string | null;
-    debug_id: string | null;
-    is_sandbox: Generated<boolean>;
+    correlation_id: string | null;
+    trxn_type: string | null;
     product_id: number | null;
+    is_sandbox: Generated<boolean>;
     created_at: Generated<Timestamp>;
     updated_at: Generated<Timestamp>;
 };
