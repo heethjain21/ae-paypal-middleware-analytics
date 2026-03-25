@@ -113,7 +113,13 @@ export const handler = async (
     try {
       if (!record.body) throw new Error("Message body is empty");
 
-      const messageData = JSON.parse(record.body) as SQSMessage;
+      let messageData;
+      try {
+        messageData = JSON.parse(record.body);
+      } catch(err) {
+        const sanitizedBody = record.body.replace(/\\\\"/g, '\\"');
+        messageData = JSON.parse(sanitizedBody);
+      }
 
       if (!messageData.table || !messageData.operation || !messageData.data) {
         throw new Error(
