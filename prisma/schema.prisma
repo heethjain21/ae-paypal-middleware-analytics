@@ -63,7 +63,7 @@ model PPCP_Payment {
   paypal_fee   Decimal? @db.Decimal(19, 4)
   gross_amount Decimal? @db.Decimal(19, 4)
   platform_fee Decimal? @db.Decimal(19, 4)
-  currency     String? @db.VarChar(3)
+  currency     String?  @db.VarChar(3)
 
   status             String?
   merchant_id        String?
@@ -84,4 +84,30 @@ model PPCP_Payment {
   @@index([debug_id])
   @@index([is_sandbox])
   @@map("ppcp_payments")
+}
+
+model All_Payment {
+  trxn_id String @id @default(uuid())
+
+  site_url    String?
+  merchant_id String?
+  req_status  String?
+
+  gross_amount Decimal? @db.Decimal(19, 4)
+  currency     String?  @db.VarChar(3)
+
+  correlation_id String?
+  trxn_type      String?
+
+  product_id Int?    @db.SmallInt
+  is_sandbox Boolean @default(false)
+
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@index([merchant_id, req_status, created_at])
+  @@index([product_id, req_status, created_at])
+  @@index([correlation_id])
+  @@index([is_sandbox])
+  @@map("all_payments")
 }

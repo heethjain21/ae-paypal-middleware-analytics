@@ -4,6 +4,19 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   : ColumnType<T, T | undefined, T>;
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
+export type All_Payment = {
+    capture_id: string;
+    site_url: string | null;
+    merchant_id: string | null;
+    request_status: string | null;
+    gross_amount: number | null;
+    currency: string | null;
+    debug_id: string | null;
+    is_sandbox: Generated<boolean>;
+    product_id: number | null;
+    created_at: Generated<Timestamp>;
+    updated_at: Generated<Timestamp>;
+};
 export type PPCP_Payment = {
     capture_id: string;
     site_url: string | null;
@@ -48,6 +61,7 @@ export type PPCP_Request = {
     updated_at: Generated<Timestamp>;
 };
 export type DB = {
+    all_payments: All_Payment;
     ppcp_payments: PPCP_Payment;
     ppcp_requests: PPCP_Request;
 };
