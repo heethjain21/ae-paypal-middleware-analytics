@@ -3,7 +3,8 @@ const path = require("path");
 
 const sourceDir = path.join(__dirname, "prisma", "generated", "types");
 const targetDirs = [
-  path.join(__dirname, "lambda", "batch-db-push", "types"),
+  path.join(__dirname, "lambda", "batch-db-push-ppcp", "types"),
+  path.join(__dirname, "lambda", "batch-db-push-all", "types"),
   path.join(__dirname, "lambda", "cleanup-db-cron", "types"),
 ];
 
