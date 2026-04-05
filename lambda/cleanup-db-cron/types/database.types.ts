@@ -18,6 +18,27 @@ export type All_Payment = {
     created_at: Generated<Timestamp>;
     updated_at: Generated<Timestamp>;
 };
+export type Payment = {
+    trxn_id: string;
+    req_status: string;
+    site_url: string | null;
+    merchant_id: string | null;
+    net_amount: number | null;
+    paypal_fee: number | null;
+    gross_amount: number | null;
+    platform_fee: number | null;
+    currency: string | null;
+    correlation_id: string | null;
+    trxn_type: string | null;
+    custom_id: string | null;
+    invoice_id: string | null;
+    debug_id: string | null;
+    meta_data: unknown | null;
+    product_id: number | null;
+    is_sandbox: Generated<boolean>;
+    created_at: Generated<Timestamp>;
+    updated_at: Generated<Timestamp>;
+};
 export type PPCP_Payment = {
     capture_id: string;
     site_url: string | null;
@@ -63,6 +84,7 @@ export type PPCP_Request = {
 };
 export type DB = {
     all_payments: All_Payment;
+    payments: Payment;
     ppcp_payments: PPCP_Payment;
     ppcp_requests: PPCP_Request;
 };
