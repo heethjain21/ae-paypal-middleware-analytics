@@ -66,7 +66,7 @@ interface LambdaResponse {
 
 // Amounts stored as NUMERIC(19,4)
 const toAmount = (value: string | number | null | undefined): number | null => {
-  if (value == null) return null;
+  if (value === null || value === undefined) return null;
   const n = typeof value === "number" ? value : parseFloat(value);
   return isNaN(n) ? null : n;
 };
@@ -74,18 +74,18 @@ const toAmount = (value: string | number | null | undefined): number | null => {
 const toProductId = (
   value: string | number | null | undefined,
 ): number | null => {
-  if (value == null || value === "-") return null;
+  if (value === null || value === undefined || value === "-") return null;
   const n = typeof value === "number" ? value : parseInt(value, 10);
   return isNaN(n) ? null : n;
 };
 
 const toNullableString = (value: string | null | undefined): string | null => {
-  if (value == null || value === "-") return null;
+  if (value === null || value === undefined || value === "-") return null;
   return value;
 };
 
 const toJson = (value: any) => {
-  if (value === "-" || value === null || value === undefined) return null;
+  if (value === null || value === undefined || value === "-") return null;
 
   if (typeof value === "string") {
     try {
