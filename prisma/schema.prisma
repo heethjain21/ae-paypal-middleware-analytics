@@ -147,3 +147,37 @@ model Payment {
   @@index([is_sandbox])
   @@map("payments")
 }
+
+model Payment_Sandbox {
+  trxn_id    String @default(uuid())
+  req_status String
+
+  site_url    String?
+  merchant_id String?
+
+  net_amount   Decimal? @db.Decimal(19, 4)
+  paypal_fee   Decimal? @db.Decimal(19, 4)
+  gross_amount Decimal? @db.Decimal(19, 4)
+  platform_fee Decimal? @db.Decimal(19, 4)
+  currency     String?  @db.VarChar(3)
+
+  correlation_id String?
+  trxn_type      String?
+
+  custom_id  String?
+  invoice_id String?
+  debug_id   String?
+  meta_data  Json?
+
+  product_id Int?    @db.SmallInt
+  is_sandbox Boolean @default(false)
+
+  created_at DateTime @default(now()) @db.Timestamptz(3)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+  @@id([trxn_id, req_status])
+  @@index([merchant_id, created_at])
+  @@index([product_id, created_at])
+  @@index([trxn_type, created_at])
+  @@map("payments_sandbox")
+}

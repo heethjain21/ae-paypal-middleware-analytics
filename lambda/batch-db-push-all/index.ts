@@ -2,7 +2,11 @@ import { Context, SQSEvent, SQSRecord } from "aws-lambda";
 import fs from "fs";
 import { Insertable, Kysely, PostgresDialect, sql } from "kysely";
 import { Pool } from "pg";
-import { DB, Payment as PaymentTable } from "./types/database.types";
+import {
+  DB,
+  Payment as PaymentTable,
+  Payment_Sandbox as PaymentSandboxTable,
+} from "./types/database.types";
 
 /**
  * IMPORTANT:
@@ -51,9 +55,15 @@ interface PaymentData {
 }
 
 interface SQSMessage {
-  table: "all_payments" | "payments";
+  table?: "all_payments";
+  source?: "all_payments";
   operation: "upsert";
   data: PaymentData;
+}
+
+interface PaymentItem {
+  record: SQSRecord;
+  message: SQSMessage;
 }
 
 interface BatchItemFailure {
@@ -99,7 +109,9 @@ const toJson = (value: any) => {
   }
 };
 
-const buildPaymentRow = (rawData: PaymentData): Insertable<PaymentTable> => {
+const buildPaymentRow = (
+  rawData: PaymentData,
+): Insertable<PaymentTable | PaymentSandboxTable> => {
   let createdAt: Date;
   if (typeof rawData.created_at === "number") {
     createdAt = new Date(rawData.created_at * 1000);
@@ -124,14 +136,16 @@ const buildPaymentRow = (rawData: PaymentData): Insertable<PaymentTable> => {
     debug_id: toNullableString(rawData.debug_id),
     meta_data: toJson(rawData.meta_data) ?? null,
     product_id: toProductId(rawData.product_id),
-    is_sandbox: rawData.is_sandbox ?? false,
     created_at: createdAt,
   };
 };
 
-const upsertPaymentsQuery = (rows: Insertable<PaymentTable>[]) =>
+const upsertQuery = (
+  table: "payments" | "payments_sandbox",
+  rows: Insertable<PaymentTable>[],
+) =>
   db
-    .insertInto("payments")
+    .insertInto(table)
     .values(rows)
     .onConflict((oc) =>
       oc.columns(["trxn_id", "req_status"]).doUpdateSet({
@@ -149,23 +163,25 @@ const upsertPaymentsQuery = (rows: Insertable<PaymentTable>[]) =>
         debug_id: sql`excluded.debug_id`,
         meta_data: sql`excluded.meta_data`,
         product_id: sql`excluded.product_id`,
-        is_sandbox: sql`excluded.is_sandbox`,
         created_at: sql`excluded.created_at`,
       }),
     );
 
 const batchUpsertPayments = async (
+  table: "payments" | "payments_sandbox",
   items: Array<{ record: SQSRecord; message: SQSMessage }>,
 ): Promise<BatchItemFailure[]> => {
   const rows = items.map(({ message }) => buildPaymentRow(message.data));
 
   try {
-    await upsertPaymentsQuery(rows).execute();
-    console.log(`Successfully batch upserted ${rows.length} payments`);
+    await upsertQuery(table, rows).execute();
+    console.log(
+      `Successfully batch upserted ${rows.length} rows into ${table}`,
+    );
     return [];
   } catch (error) {
     console.error(
-      "Batch upsert failed, falling back to individual inserts:",
+      `Batch upsert into ${table} failed, falling back to individual inserts:`,
       error,
     );
 
@@ -174,7 +190,7 @@ const batchUpsertPayments = async (
     await Promise.all(
       items.map(async ({ record, message }) => {
         try {
-          await upsertPaymentsQuery([buildPaymentRow(message.data)]).execute();
+          await upsertQuery(table, [buildPaymentRow(message.data)]).execute();
         } catch (err) {
           console.error(`Failed to process message ${record.messageId}:`, err);
           console.log(
@@ -200,10 +216,7 @@ export const handler = async (
   console.log(`Processing ${event.Records.length} SQS messages`);
 
   const failedMessageIds = new Set<string>();
-  const paymentItems: Array<{
-    record: SQSRecord;
-    message: SQSMessage;
-  }> = [];
+  const paymentItems: PaymentItem[] = [];
 
   for (const record of event.Records) {
     try {
@@ -224,8 +237,8 @@ export const handler = async (
       }
 
       if (
-        messageData.table === "payments" ||
-        messageData.table === "all_payments"
+        (messageData.table && messageData.table === "all_payments") ||
+        (messageData.source && messageData.source === "all_payments")
       ) {
         paymentItems.push({ record, message: messageData });
       } else {
@@ -237,21 +250,40 @@ export const handler = async (
     }
   }
 
+  const liveItems: PaymentItem[] = [];
+  const sandboxItems: PaymentItem[] = [];
+
+  paymentItems.forEach((p) => {
+    const isSandbox =
+      p.message.data.is_sandbox ||
+      p.message.data.is_sandbox + "".toLowerCase() === "true";
+
+    if (isSandbox) sandboxItems.push(p);
+    else liveItems.push(p);
+  });
+
   let failedPayments: string[] = [];
 
-  if (paymentItems.length > 0) {
-    const failures = await batchUpsertPayments(paymentItems);
-    failures.forEach((f) => {
-      failedPayments.push(f.itemIdentifier);
-      failedMessageIds.add(f.itemIdentifier);
-    });
-  }
+  const [liveFailures, sandboxFailures] = await Promise.all([
+    liveItems.length > 0
+      ? batchUpsertPayments("payments", liveItems)
+      : Promise.resolve([]),
+    sandboxItems.length > 0
+      ? batchUpsertPayments("payments_sandbox", sandboxItems)
+      : Promise.resolve([]),
+  ]);
+
+  [...liveFailures, ...sandboxFailures].forEach((f) => {
+    failedPayments.push(f.itemIdentifier);
+    failedMessageIds.add(f.itemIdentifier);
+  });
 
   console.log(
     JSON.stringify({
       msg: "processing_result",
       total_messages: event.Records.length,
-      payments_to_save: paymentItems.length,
+      live_payments_to_save: liveItems.length,
+      sandbox_payments_to_save: sandboxItems.length,
       payments_actually_saved: paymentItems.length - failedPayments.length,
       total_failed_messages: failedMessageIds.size,
     }),
