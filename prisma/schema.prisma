@@ -86,32 +86,6 @@ model PPCP_Payment {
   @@map("ppcp_payments")
 }
 
-model All_Payment {
-  trxn_id String @id @default(uuid())
-
-  site_url    String?
-  merchant_id String?
-  req_status  String?
-
-  gross_amount Decimal? @db.Decimal(19, 4)
-  currency     String?  @db.VarChar(3)
-
-  correlation_id String?
-  trxn_type      String?
-
-  product_id Int?    @db.SmallInt
-  is_sandbox Boolean @default(false)
-
-  created_at DateTime @default(now()) @db.Timestamptz(3)
-  updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(3)
-
-  @@index([merchant_id, req_status, created_at])
-  @@index([product_id, req_status, created_at])
-  @@index([correlation_id])
-  @@index([is_sandbox])
-  @@map("all_payments")
-}
-
 model Payment {
   trxn_id    String @default(uuid())
   req_status String
@@ -134,17 +108,14 @@ model Payment {
   meta_data  Json?
 
   product_id Int?    @db.SmallInt
-  is_sandbox Boolean @default(false)
 
   created_at DateTime @default(now()) @db.Timestamptz(3)
   updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
   @@id([trxn_id, req_status])
-  @@index([merchant_id, req_status, created_at])
-  @@index([product_id, req_status, created_at])
-  @@index([correlation_id])
-  @@index([debug_id])
-  @@index([is_sandbox])
+  @@index([merchant_id, created_at])
+  @@index([product_id, created_at])
+  @@index([trxn_type, created_at])
   @@map("payments")
 }
 
@@ -170,7 +141,6 @@ model Payment_Sandbox {
   meta_data  Json?
 
   product_id Int?    @db.SmallInt
-  is_sandbox Boolean @default(false)
 
   created_at DateTime @default(now()) @db.Timestamptz(3)
   updated_at DateTime @default(now()) @updatedAt @db.Timestamptz(3)
