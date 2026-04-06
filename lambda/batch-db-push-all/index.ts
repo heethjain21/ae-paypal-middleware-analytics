@@ -56,7 +56,7 @@ interface PaymentData {
 
 interface SQSMessage {
   table?: "all_payments";
-  source?: "all_payments";
+  event?: "all_payments";
   operation: "upsert";
   data: PaymentData;
 }
@@ -238,7 +238,7 @@ export const handler = async (
 
       if (
         (messageData.table && messageData.table === "all_payments") ||
-        (messageData.source && messageData.source === "all_payments")
+        (messageData.event && messageData.event === "all_payments")
       ) {
         paymentItems.push({ record, message: messageData });
       } else {
