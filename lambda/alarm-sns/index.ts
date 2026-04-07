@@ -256,6 +256,8 @@ async function formatApiGatewayLogs(
         config.logGroupName,
         evt.logStreamName ?? "",
         apiGwEventId,
+        evt.timestamp,
+        evt.eventId,
       );
 
       let result =
@@ -355,15 +357,26 @@ function buildCloudWatchUrl(
   logGroupName: string,
   logStreamName: string,
   filterValue: string,
+  timestamp?: number,
+  eventId?: string,
 ): string {
   function encode(str: string): string {
     return encodeURIComponent(str).replace(/%/g, "$25");
   }
 
   const region = process.env.AWS_REGION || "us-east-2";
-  const quotedFilter = `"${filterValue}"`;
 
-  return `https://${region}.console.aws.amazon.com/cloudwatch/home?region=${region}#logsV2:log-groups/log-group/${encode(logGroupName)}/log-events/${encode(logStreamName)}?filterPattern=${encode(quotedFilter)}`;
+  // specific for api gateway where simple url isn't working properly for some reaso
+  if (timestamp && eventId) {
+    const quotedFilter = encode(`"${filterValue}"`);
+    const query = `$3Fstart$3D${timestamp}$26refEventId$3D${eventId}$26filterPattern$3D${quotedFilter}`;
+    return `https://${region}.console.aws.amazon.com/cloudwatch/home?region=${region}#logsV2:log-groups/log-group/${encode(logGroupName)}/log-events/${encode(logStreamName)}${query}`;
+  }
+  // simple url without timstamp/eventid
+  else {
+    const quotedFilter = `"${filterValue}"`;
+    return `https://${region}.console.aws.amazon.com/cloudwatch/home?region=${region}#logsV2:log-groups/log-group/${encode(logGroupName)}/log-events/${encode(logStreamName)}?filterPattern=${encode(quotedFilter)}`;
+  }
 }
 
 function findMatchingPrefix(alarmName: string): string | null {
